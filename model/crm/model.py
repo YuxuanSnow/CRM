@@ -28,31 +28,31 @@ class CRM(nn.Module):
         # configs
         input_specs = specs["Input"]
         self.input = Dummy()
-        self.input.scale = input_specs['scale']
-        self.input.resolution = input_specs['resolution']
-        self.tet_grid_size = input_specs['tet_grid_size']
-        self.camera_angle_num = input_specs['camera_angle_num']
+        self.input.scale = input_specs['scale']                 # 0.95
+        self.input.resolution = input_specs['resolution']       # [256, 256]
+        self.tet_grid_size = input_specs['tet_grid_size']       # 80
+        self.camera_angle_num = input_specs['camera_angle_num'] # 8
 
         self.arch = Dummy()
-        self.arch.fea_concat = specs["ArchSpecs"]["fea_concat"]
-        self.arch.mlp_bias = specs["ArchSpecs"]["mlp_bias"]
+        self.arch.fea_concat = specs["ArchSpecs"]["fea_concat"] # false
+        self.arch.mlp_bias = specs["ArchSpecs"]["mlp_bias"]     # true
 
         self.dec = Dummy()
-        self.dec.c_dim = specs["DecoderSpecs"]["c_dim"]
-        self.dec.plane_resolution = specs["DecoderSpecs"]["plane_resolution"]
+        self.dec.c_dim = specs["DecoderSpecs"]["c_dim"]          # 32
+        self.dec.plane_resolution = specs["DecoderSpecs"]["plane_resolution"] # 256
 
         self.geo_type = specs["Train"].get("geo_type", "flex") # "dmtet" or "flex"
 
         self.unet2 = UNetPP(in_channels=self.dec.c_dim)
 
         mlp_chnl_s = 3 if self.arch.fea_concat else 1  # 3 for queried triplane feature concatenation
-        self.decoder = TetTexNet(plane_reso=self.dec.plane_resolution, fea_concat=self.arch.fea_concat)
+        self.decoder = TetTexNet(plane_reso=self.dec.plane_resolution, fea_concat=self.arch.fea_concat) # triplane feature query function
 
         if self.geo_type == "flex":
             self.weightMlp = nn.Sequential(
                             nn.Linear(mlp_chnl_s * 32 * 8, 512),
                             nn.SiLU(),
-                            nn.Linear(512, 21))         
+                            nn.Linear(512, 21))         # predict per-cube learnable weights
             
         self.sdfMlp = SdfMlp(mlp_chnl_s * 32, 512, bias=self.arch.mlp_bias) 
         self.rgbMlp = RgbMlp(mlp_chnl_s * 32, 512, bias=self.arch.mlp_bias)
@@ -69,11 +69,11 @@ class CRM(nn.Module):
 
     def decode(self, data, triplane_feature2):
         if self.geo_type == "flex":
-            tet_verts = self.renderer.flexicubes.verts.unsqueeze(0)
-            tet_indices = self.renderer.flexicubes.indices
+            tet_verts = self.renderer.flexicubes.verts.unsqueeze(0) # get init flexicubes vertices
+            tet_indices = self.renderer.flexicubes.indices          # get flexicubes indices
 
-        dec_verts = self.decoder(triplane_feature2, tet_verts)
-        out = self.sdfMlp(dec_verts)
+        dec_verts = self.decoder(triplane_feature2, tet_verts)      # queried triplane feature of location (the whole R3)
+        out = self.sdfMlp(dec_verts)                                # predict SDF and deformation based on features at individual location
 
         weight = None
         if self.geo_type == "flex":
@@ -86,7 +86,7 @@ class CRM(nn.Module):
         if self.spob:
             pred_sdf = pred_sdf + self.radius - torch.sqrt((tet_verts**2).sum(-1))
 
-        _, verts, faces = self.renderer(data, pred_sdf, deformation, tet_verts, tet_indices, weight= weight)
+        _, verts, faces = self.renderer(data, pred_sdf, deformation, tet_verts, tet_indices, weight= weight) # get the mesh given current SDF, deformation, and weights
         return verts[0].unsqueeze(0), faces[0].int()
 
     def export_mesh(self, data, out_dir, ind, device=None, tri_fea_2 = None):
